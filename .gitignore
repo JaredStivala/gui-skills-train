@@ -1,4 +1,8 @@
 __pycache__/
 *.pyc
+lora-out/
+wandb/
+*.swp
+.DS_Store
 .env
 *.token
