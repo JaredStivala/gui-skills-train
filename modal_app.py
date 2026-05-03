@@ -37,7 +37,17 @@ image = (
     )
 )
 
-hf_token = open("/Users/jaredstivala/.cache/huggingface/token").read().strip()
+# Read the HF token from the local cache so we can hand it to the
+# remote container as a Modal Secret. This file only exists on the
+# developer's machine — when Modal re-imports this module inside the
+# container, fall back to the env var (already populated by the Secret).
+import os as _os
+
+_HF_TOKEN_PATH = "/Users/jaredstivala/.cache/huggingface/token"
+if _os.path.exists(_HF_TOKEN_PATH):
+    hf_token = open(_HF_TOKEN_PATH).read().strip()
+else:
+    hf_token = _os.environ.get("HF_TOKEN", "")
 hf_secret = modal.Secret.from_dict({"HF_TOKEN": hf_token})
 
 
