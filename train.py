@@ -123,49 +123,46 @@ class QwenVLCollator:
         self.processor = processor
 
     def __call__(self, examples):
-        # Per-example processing, then pad/stack on the long-dim. With
-        # batch_size=2 the simple approach is to process each example
-        # independently and let the processor handle internal padding by
-        # passing them as a single list.
-        all_text, all_images = [], []
+        # Process each example: get the FULL chat (user+assistant) and the
+        # PROMPT-only chat (user with add_generation_prompt=True). Crucially
+        # we run the processor on the prompt-side WITH images too, so we
+        # learn the post-image-expansion prompt length and can mask correctly.
+        all_full_text, all_images, prompt_lens = [], [], []
         for i, ex in enumerate(examples):
             try:
                 msgs = ex["messages"]
-                all_text.append(
-                    self.processor.apply_chat_template(
-                        msgs, tokenize=False, add_generation_prompt=False
-                    )
+                full_text = self.processor.apply_chat_template(
+                    msgs, tokenize=False, add_generation_prompt=False
+                )
+                prompt_text = self.processor.apply_chat_template(
+                    [msgs[0]], tokenize=False, add_generation_prompt=True
                 )
                 imgs, _ = process_vision_info(msgs)
+                # Tokenize prompt with images to get the real expanded length
+                prompt_batch = self.processor(
+                    text=[prompt_text],
+                    images=imgs,
+                    padding=False,
+                    return_tensors="pt",
+                )
+                prompt_lens.append(int(prompt_batch["input_ids"].shape[1]))
+                all_full_text.append(full_text)
                 all_images.append(imgs)
             except Exception as e:
                 raise RuntimeError(f"failed to format example {i}: {e}") from e
 
-        # Flatten images: processor expects a flat list when text is a list.
         flat_images = [img for sub in all_images for img in (sub or [])]
         batch = self.processor(
-            text=all_text,
+            text=all_full_text,
             images=flat_images,
             padding=True,
             return_tensors="pt",
         )
 
-        # Build labels per example by re-tokenizing the prompt-only chat.
+        # Mask the prompt prefix (now correctly accounting for image-token expansion)
         labels = batch["input_ids"].clone()
-        for i, ex in enumerate(examples):
-            try:
-                prompt_text = self.processor.apply_chat_template(
-                    [ex["messages"][0]],
-                    tokenize=False,
-                    add_generation_prompt=True,
-                )
-                prompt_ids = self.processor.tokenizer(
-                    prompt_text, return_tensors="pt", add_special_tokens=False
-                )["input_ids"][0]
-                prompt_len = prompt_ids.shape[0]
-                labels[i, :prompt_len] = -100
-            except Exception as e:
-                raise RuntimeError(f"failed to mask example {i}: {e}") from e
+        for i, plen in enumerate(prompt_lens):
+            labels[i, :plen] = -100
 
         pad_id = self.processor.tokenizer.pad_token_id
         if pad_id is not None:
@@ -182,7 +179,7 @@ collator = QwenVLCollator(processor)
 # ---------------------------------------------------------------------------
 training_args = TrainingArguments(
     output_dir=str(OUTPUT_DIR),
-    num_train_epochs=2,
+    num_train_epochs=8,
     per_device_train_batch_size=2,
     gradient_accumulation_steps=4,
     learning_rate=1e-4,
