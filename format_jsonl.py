@@ -25,7 +25,7 @@ GOAL_TEMPLATE = (
 )
 ACTION_PROMPT = (
     "What is the next action? Reply with one of: "
-    'CLICK <i> | TYPE "text" | STOP | BACK'
+    'CLICK <i> | TYPE <i> "text" | STOP | BACK'
 )
 TEXT_TRUNC = 80   # max chars per box label
 TOP_N_BOXES = 10  # top-N boxes per step shown to the model
@@ -43,7 +43,8 @@ def action_to_string(action: dict) -> str:
     if t == "TYPE":
         # Escape embedded quotes so the canonical form stays parseable.
         text = action.get("text", "").replace('"', '\\"')
-        return f'TYPE "{text}"'
+        idx = action.get("index", 0)
+        return f'TYPE {idx} "{text}"'
     if t == "STOP":
         return "STOP"
     if t == "BACK":
